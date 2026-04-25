@@ -1,0 +1,187 @@
+services:
+  # ── Reverse Proxy ─────────────────────────────────────────────────────────
+  traefik:
+    image: traefik:v2.11
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "${TRAEFIK_DASHBOARD_PORT:-8888}:8080"
+    volumes:
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
+    networks:
+      - default
+      - traefik_public
+
+  # ── Infrastructure ────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: arxiv
+      POSTGRES_PASSWORD: arxiv
+      POSTGRES_DB: arxiv
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U arxiv"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  qdrant:
+    image: qdrant/qdrant:v1.9.2
+    restart: unless-stopped
+    volumes:
+      - qdrant_data:/qdrant/storage
+      - ./qdrant/config.yaml:/qdrant/config/production.yaml
+    ports:
+      - "${QDRANT_PORT:-6333}:6333"
+      - "${QDRANT_GRPC_PORT:-6334}:6334"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/6333'"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  mlflow:
+    build:
+      context: ./mlflow
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      MLFLOW_BACKEND_STORE_URI: postgresql://arxiv:arxiv@postgres:5432/arxiv
+      MLFLOW_DEFAULT_ARTIFACT_ROOT: /mlflow/artifacts
+    volumes:
+      - mlflow_artifacts:/mlflow/artifacts
+    ports:
+      - "${MLFLOW_PORT:-5001}:5000"
+    command: >
+      mlflow server
+      --host 0.0.0.0
+      --port 5000
+      --backend-store-uri postgresql://arxiv:arxiv@postgres:5432/arxiv
+      --default-artifact-root /mlflow/artifacts
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:5000/health')\" 2>/dev/null || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+
+  # ── Ingestion ─────────────────────────────────────────────────────────────
+  ingestion:
+    build:
+      context: ./services/ingestion
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    environment:
+      QDRANT_URL: http://qdrant:6333
+      EMBEDDING_MODEL: sentence-transformers/all-MiniLM-L6-v2
+      ARXIV_CATEGORIES: cs.LG,cs.AI,cs.CL
+      PAPERS_PER_CATEGORY: 70
+      CHUNK_SIZE: 512
+      CHUNK_OVERLAP: 64
+    volumes:
+      - ingestion_cache:/app/cache
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8001/health || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 300s
+
+  # ── Backend ───────────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./services/backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      mlflow:
+        condition: service_healthy
+      ingestion:
+        condition: service_healthy
+    environment:
+      QDRANT_URL: http://qdrant:6333
+      POSTGRES_URL: postgresql://arxiv:arxiv@postgres:5432/arxiv
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      EMBEDDING_MODEL: sentence-transformers/all-MiniLM-L6-v2
+      RERANKER_MODEL: cross-encoder/ms-marco-MiniLM-L-6-v2
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3}
+      TOP_K_RETRIEVE: 20
+      TOP_K_RERANK: 5
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/health || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+
+  # ── Evaluation ────────────────────────────────────────────────────────────
+  evaluation:
+    build:
+      context: ./services/evaluation
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+      mlflow:
+        condition: service_healthy
+    environment:
+      BACKEND_URL: http://backend:8000
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      POSTGRES_URL: postgresql://arxiv:arxiv@postgres:5432/arxiv
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3}
+      RUN_ON_STARTUP: ${RUN_EVAL_ON_STARTUP:-false}
+    volumes:
+      - ./services/evaluation/testset.json:/app/testset.json:ro
+      - eval_results:/app/results
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8002/health || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+
+  # ── Frontend ──────────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:80/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres_data:
+  qdrant_data:
+  mlflow_artifacts:
+  ingestion_cache:
+  eval_results:
+
+networks:
+  default:
+    name: arxiv-rag-network
+  traefik_public:
+    external: true

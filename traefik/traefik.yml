@@ -1,0 +1,19 @@
+api:
+  dashboard: true
+  insecure: true
+
+entryPoints:
+  web:
+    address: ":80"
+
+providers:
+  file:
+    filename: /etc/traefik/dynamic.yml
+    watch: true
+  docker:
+    endpoint: "tcp://host.docker.internal:2375"
+    exposedByDefault: false
+    network: traefik_public
+
+log:
+  level: INFO

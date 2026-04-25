@@ -1,0 +1,152 @@
+[
+  {
+    "id": 1,
+    "question": "What is the attention mechanism in transformers and how does it work?",
+    "ground_truth": "The attention mechanism computes a weighted sum of value vectors, where weights are derived from dot-product similarity between query and key vectors, scaled by the square root of the key dimension and passed through softmax. This allows each token to attend to all other tokens in the sequence.",
+    "category": "transformers"
+  },
+  {
+    "id": 2,
+    "question": "How does BERT differ from GPT in its training objective?",
+    "ground_truth": "BERT uses masked language modeling (MLM) and next sentence prediction, making it bidirectional. GPT uses autoregressive language modeling, predicting the next token from left to right, making it unidirectional. BERT is designed for understanding tasks while GPT is designed for generation.",
+    "category": "language_models"
+  },
+  {
+    "id": 3,
+    "question": "What is LoRA and why is it useful for fine-tuning large language models?",
+    "ground_truth": "LoRA (Low-Rank Adaptation) fine-tunes large models by injecting trainable low-rank decomposition matrices into weight layers, drastically reducing trainable parameters. Instead of updating full weight matrices, it learns delta W = A*B where A and B are low-rank matrices, reducing memory and compute requirements while preserving model quality.",
+    "category": "fine_tuning"
+  },
+  {
+    "id": 4,
+    "question": "What is RLHF and how is it used to align language models?",
+    "ground_truth": "Reinforcement Learning from Human Feedback (RLHF) trains a reward model on human preference rankings, then uses PPO to optimize the language model to maximize the reward while constraining divergence from the original policy via a KL penalty. This aligns model outputs with human preferences for helpfulness, harmlessness, and honesty.",
+    "category": "alignment"
+  },
+  {
+    "id": 5,
+    "question": "Explain how diffusion models generate images.",
+    "ground_truth": "Diffusion models learn to reverse a gradual noising process. During training, Gaussian noise is added to data over T steps. The model learns to predict and remove noise at each step. During inference, the model starts from pure noise and iteratively denoises using the learned reverse process, guided by a score function or classifier.",
+    "category": "generative_models"
+  },
+  {
+    "id": 6,
+    "question": "What is chain-of-thought prompting and when does it improve LLM performance?",
+    "ground_truth": "Chain-of-thought prompting provides few-shot examples that include intermediate reasoning steps before the final answer. It improves performance on tasks requiring multi-step reasoning such as math, symbolic reasoning, and commonsense inference. The benefit is most pronounced in larger models (typically >100B parameters).",
+    "category": "prompting"
+  },
+  {
+    "id": 7,
+    "question": "How does the Mixture of Experts (MoE) architecture scale language models efficiently?",
+    "ground_truth": "MoE replaces dense feed-forward layers with multiple expert sub-networks plus a gating router. For each token, the router activates only a subset (typically 1-2) of experts. This increases total parameter count while keeping per-token compute constant, allowing trillion-parameter models to run at manageable FLOPs.",
+    "category": "architecture"
+  },
+  {
+    "id": 8,
+    "question": "What are the key differences between PPO and DPO for LLM alignment?",
+    "ground_truth": "PPO (Proximal Policy Optimization) requires training a separate reward model and uses online RL to optimize the policy, which is computationally expensive and unstable. DPO (Direct Preference Optimization) eliminates the reward model by directly optimizing a binary cross-entropy loss on preference pairs, making it simpler, more stable, and cheaper to train.",
+    "category": "alignment"
+  },
+  {
+    "id": 9,
+    "question": "What is retrieval-augmented generation (RAG) and what problem does it solve?",
+    "ground_truth": "RAG combines retrieval of relevant documents with generative language models. It addresses the knowledge cutoff limitation and hallucination problem by retrieving up-to-date factual context and conditioning generation on it. The model generates answers grounded in retrieved evidence rather than relying solely on parametric memory.",
+    "category": "rag"
+  },
+  {
+    "id": 10,
+    "question": "How do vision-language models like CLIP learn joint embeddings?",
+    "ground_truth": "CLIP trains an image encoder and text encoder jointly using contrastive learning on 400M image-text pairs. It maximizes cosine similarity between matching image-text pairs and minimizes it for non-matching pairs in a batch. This creates a shared embedding space where semantically similar images and texts are nearby.",
+    "category": "multimodal"
+  },
+  {
+    "id": 11,
+    "question": "What is the role of temperature in language model sampling?",
+    "ground_truth": "Temperature scales the logits before softmax: lower temperatures sharpen the distribution making the model more deterministic and focused on high-probability tokens, while higher temperatures flatten the distribution increasing diversity and randomness. Temperature=0 is equivalent to greedy decoding.",
+    "category": "inference"
+  },
+  {
+    "id": 12,
+    "question": "How does rotary positional embedding (RoPE) differ from learned positional embeddings?",
+    "ground_truth": "RoPE encodes positions by rotating the query and key vectors in a way that makes their dot product depend only on the relative position difference, not absolute positions. This allows better generalization to longer sequences than seen during training. Unlike learned embeddings, RoPE requires no additional parameters and has strong extrapolation properties.",
+    "category": "architecture"
+  },
+  {
+    "id": 13,
+    "question": "What is speculative decoding and how does it speed up LLM inference?",
+    "ground_truth": "Speculative decoding uses a small draft model to generate candidate token sequences in parallel, which the larger target model then verifies in a single forward pass using parallel attention. Accepted tokens are kept; the first rejected token triggers resampling. This achieves 2-3x speedup because verification is faster than sequential generation.",
+    "category": "inference"
+  },
+  {
+    "id": 14,
+    "question": "Explain the concept of in-context learning in large language models.",
+    "ground_truth": "In-context learning (ICL) is the ability of LLMs to perform new tasks by conditioning on a few input-output demonstration examples in the prompt, without updating model weights. The model infers the task pattern from examples and applies it to the query. ICL emerges at scale and is sensitive to example order and format.",
+    "category": "language_models"
+  },
+  {
+    "id": 15,
+    "question": "What is the purpose of the KL divergence term in the RLHF objective?",
+    "ground_truth": "The KL divergence penalty in RLHF prevents the policy from drifting too far from the reference (SFT) model. Without it, the policy can over-optimize the reward model by generating degenerate text that exploits reward model weaknesses. The KL term acts as a regularizer balancing reward maximization against staying close to the original policy.",
+    "category": "alignment"
+  },
+  {
+    "id": 16,
+    "question": "How do sparse autoencoders help interpret language model representations?",
+    "ground_truth": "Sparse autoencoders (SAEs) decompose dense activations into sparse combinations of interpretable feature directions by training an encoder-decoder with an L1 sparsity penalty. The learned features tend to correspond to human-interpretable concepts. SAEs help identify polysemantic neurons and map the feature geometry of transformer representations.",
+    "category": "interpretability"
+  },
+  {
+    "id": 17,
+    "question": "What is flash attention and why is it more memory efficient than standard attention?",
+    "ground_truth": "FlashAttention computes attention without materializing the full NxN attention matrix in HBM (high-bandwidth memory) by using tiling and online softmax updates that keep intermediate results in fast SRAM. This reduces memory complexity from O(N^2) to O(N) and achieves 2-4x speedup by minimizing slow HBM reads and writes.",
+    "category": "architecture"
+  },
+  {
+    "id": 18,
+    "question": "How does gradient checkpointing reduce memory usage during training?",
+    "ground_truth": "Gradient checkpointing trades compute for memory by not storing all intermediate activations during the forward pass. Instead, it stores only a subset of checkpoints and recomputes the intermediate activations during backpropagation as needed. This reduces activation memory from O(N) to O(sqrt(N)) at the cost of approximately 33% extra forward compute.",
+    "category": "training"
+  },
+  {
+    "id": 19,
+    "question": "What is the difference between encoder-only, decoder-only, and encoder-decoder transformer architectures?",
+    "ground_truth": "Encoder-only models (BERT) use bidirectional attention and are suited for understanding/classification tasks. Decoder-only models (GPT) use causal (unidirectional) attention and are suited for generation. Encoder-decoder models (T5, BART) use bidirectional encoding and autoregressive decoding, suited for seq2seq tasks like translation and summarization.",
+    "category": "architecture"
+  },
+  {
+    "id": 20,
+    "question": "How does quantization reduce LLM inference cost and what are the tradeoffs?",
+    "ground_truth": "Quantization reduces weight and/or activation precision from FP16/BF16 to INT8 or INT4, reducing memory footprint by 2-4x and increasing throughput due to lower memory bandwidth and faster integer compute. The tradeoff is accuracy degradation, especially at INT4. Post-training quantization is fast but less accurate than quantization-aware training.",
+    "category": "inference"
+  },
+  {
+    "id": 21,
+    "question": "What is continual pre-training and when would you use it instead of fine-tuning?",
+    "ground_truth": "Continual pre-training continues training a pretrained LLM on new domain-specific text using the same language modeling objective, injecting domain knowledge without task-specific labels. It is preferred over fine-tuning when the gap between pretraining data and the target domain is large, or when the model needs general capability improvements rather than task-specific behavior.",
+    "category": "training"
+  },
+  {
+    "id": 22,
+    "question": "What are the key components of the FAISS vector index and how does it enable fast similarity search?",
+    "ground_truth": "FAISS uses approximate nearest neighbor search with inverted file indexes (IVF) that partition the vector space into Voronoi cells, and product quantization (PQ) that compresses vectors by splitting them into subvectors and quantizing each independently. IVF reduces candidate search space while PQ enables compact storage. HNSW graphs provide another approach via hierarchical navigable small worlds.",
+    "category": "retrieval"
+  },
+  {
+    "id": 23,
+    "question": "How does Constitutional AI (CAI) improve model safety during training?",
+    "ground_truth": "Constitutional AI first uses self-critique: the model rewrites harmful responses according to a set of principles (the 'constitution'). Then RL is performed using AI feedback (RLAIF) where the model itself labels preference pairs based on constitutional principles, replacing human labelers. This scales safety training without requiring large volumes of human preference labels.",
+    "category": "alignment"
+  },
+  {
+    "id": 24,
+    "question": "What is the role of the critic in actor-critic reinforcement learning methods?",
+    "ground_truth": "The critic estimates the value function V(s) or Q(s,a) to provide low-variance gradient estimates for the actor's policy updates. Instead of using Monte Carlo returns (high variance), the actor uses the advantage A(s,a) = r + V(s') - V(s) estimated by the critic. This reduces variance while introducing some bias, making learning more stable.",
+    "category": "reinforcement_learning"
+  },
+  {
+    "id": 25,
+    "question": "What is model distillation and how does it transfer knowledge from a large model to a small one?",
+    "ground_truth": "Knowledge distillation trains a smaller student model to match the soft probability outputs (logits) of a larger teacher model, rather than hard labels. Soft targets encode the teacher's learned similarity structure between classes. The student is trained on a combination of cross-entropy with ground truth and KL divergence from teacher logits, often with a temperature parameter to soften the distribution.",
+    "category": "compression"
+  }
+]

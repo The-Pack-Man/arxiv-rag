@@ -1,0 +1,34 @@
+http:
+  routers:
+    frontend:
+      entryPoints:
+        - web
+      rule: "Host(`arxiv.localhost`)"
+      service: frontend
+      priority: 1
+
+    backend:
+      entryPoints:
+        - web
+      rule: "Host(`arxiv.localhost`) && PathPrefix(`/api`)"
+      middlewares:
+        - backend-strip
+      service: backend
+      priority: 10
+
+  middlewares:
+    backend-strip:
+      stripPrefix:
+        prefixes:
+          - "/api"
+
+  services:
+    frontend:
+      loadBalancer:
+        servers:
+          - url: "http://frontend:80"
+
+    backend:
+      loadBalancer:
+        servers:
+          - url: "http://backend:8000"
