@@ -32,6 +32,9 @@ claims:
   - id: C9
     text: Tested the evaluator with pytest, including an integration test that runs the real RAGAS metrics against a local fake OpenAI-compatible judge server.
     evidence: [services/evaluation/tests/]
+  - id: C10
+    text: Measured naive vs reranked retrieval with paired, per-question RAGAS comparisons and bootstrap confidence intervals, and wrote up the result including the failure mode where reranking amplifies corpus gaps.
+    evidence: [scripts/compare_runs.py, EVALUATION.md, evals/results/]
   - id: C5
     text: Logged every query with latency and model used to Postgres for later analysis.
     evidence: [services/backend/database.py, postgres/init.sql]
@@ -47,14 +50,30 @@ metrics:
     method: pytest in services/evaluation (Python 3.11), 2026-10-17
     artifact: ""
     date: 2026-10-17
-  # Add naive-vs-reranked RAGAS scores here only after a run's JSON is committed under evals/results/.
+  - id: M2
+    name: Context precision, naive vs cross-encoder reranked retrieval (RAGAS, 25 questions)
+    value: "0.30 -> 0.50 (+0.20, 95% paired bootstrap interval +0.09 to +0.31)"
+    status: measured
+    method: RAGAS 0.4, judge qwen2.5:7b, generator llama3, local Ollama, 551 papers indexed, one run; scripts/compare_runs.py
+    artifact: evals/results/20261018T221520Z_reranked.json
+    date: 2026-10-18
+  - id: M3
+    name: Faithfulness, answer relevancy, context recall, naive vs reranked
+    value: "0.77 vs 0.81, 0.82 vs 0.77, 0.57 vs 0.58; all within noise (intervals include zero)"
+    status: measured
+    method: same runs as M2
+    artifact: evals/results/20261018T215227Z_naive.json
+    date: 2026-10-18
 
 decisions:
+  - Replaced fabricated benchmark numbers with measured ones and reported where the claim reversed (answer relevancy +19% claimed, -0.05 measured, within noise).
+  - Compared variants question by question with bootstrap intervals rather than reporting means alone.
   - Local embedding and reranking models keep the stack free to run. Only generation optionally uses a paid API.
   - The reranker is a request flag, so both variants run through the identical backend path during evaluation.
 
 limitations:
-  - No benchmark results committed yet. Scores need a local run with Ollama.
+  - 25 questions, one run, 7B judge; only the context-precision gain is distinguishable from noise.
+  - Context recall (~0.58) is limited by corpus coverage: ingestion pulls recent papers, and many test questions concern classic papers that may not be indexed.
   - A 7B local judge is noisier than a frontier model. Compare variants under the same judge only.
   - Backend, ingestion, and frontend have no automated tests. Only the evaluator does.
   - Single-node, local deployment. No auth, rate limiting, or load testing.

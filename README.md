@@ -1,6 +1,8 @@
 # ArXiv RAG Platform
 
-A self-hosted Retrieval-Augmented Generation system for ArXiv research papers. Search and chat with 200+ papers from cs.LG, cs.AI, and cs.CL, with a RAGAS evaluation suite that compares naive and reranked retrieval using a free local judge model.
+A self-hosted Retrieval-Augmented Generation system for ArXiv research papers. Search and chat with hundreds of papers from cs.LG, cs.AI, and cs.CL, with a RAGAS evaluation suite that compares naive and reranked retrieval using a free local judge model.
+
+**Measured result:** cross-encoder reranking raises context precision from 0.30 to 0.50 (95% interval +0.09 to +0.31) on 25 questions. Faithfulness, answer relevancy, and recall don't change measurably. Details in [EVALUATION.md](EVALUATION.md).
 
 **Runs entirely via `docker compose up`. No cloud infrastructure required.**
 
