@@ -134,6 +134,7 @@ async def chat(req: ChatRequest, background_tasks: BackgroundTasks):
         model=result["model"],
         latency_ms=result["latency_ms"],
         reranked=result["reranked"],
+        contexts=result["contexts"],
     )
 
 

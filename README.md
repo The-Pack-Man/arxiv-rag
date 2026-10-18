@@ -1,6 +1,6 @@
 # ArXiv RAG Platform
 
-A production-grade Retrieval-Augmented Generation system for ArXiv research papers. Search and chat with 200+ papers from cs.LG, cs.AI, and cs.CL — with a rigorous RAGAS evaluation suite comparing naive vs. reranked pipelines.
+A self-hosted Retrieval-Augmented Generation system for ArXiv research papers. Search and chat with 200+ papers from cs.LG, cs.AI, and cs.CL, with a RAGAS evaluation suite that compares naive and reranked retrieval using a free local judge model.
 
 **Runs entirely via `docker compose up`. No cloud infrastructure required.**
 
@@ -11,7 +11,7 @@ A production-grade Retrieval-Augmented Generation system for ArXiv research pape
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                        User (browser)                           │
-│                     localhost:3000 (React)                      │
+│                     arxiv.localhost (React)                     │
 └─────────────────┬───────────────────────────────────────────────┘
                   │ HTTP
 ┌─────────────────▼───────────────────────────────────────────────┐
@@ -44,7 +44,7 @@ A production-grade Retrieval-Augmented Generation system for ArXiv research pape
 | Embeddings | `all-MiniLM-L6-v2` (local, no API) |
 | Reranker | `cross-encoder/ms-marco-MiniLM-L-6-v2` (local) |
 | LLM | GPT-4o-mini (OpenAI) or Ollama llama3 (free fallback) |
-| Evaluation | RAGAS (faithfulness, relevancy, precision, recall) |
+| Evaluation | RAGAS 0.4 (faithfulness, answer relevancy, context precision, context recall), judged by a local Ollama model |
 | Experiment tracking | MLflow |
 | Database | PostgreSQL 16 |
 | Backend | FastAPI + Python 3.11 |
@@ -60,8 +60,8 @@ A production-grade Retrieval-Augmented Generation system for ArXiv research pape
 
 - Docker Desktop (or Docker Engine + Compose plugin)
 - 8 GB RAM recommended (models download on first build)
-- _Optional_: OpenAI API key for GPT-4o-mini + RAGAS scoring
-- _Optional_: [Ollama](https://ollama.ai) running locally with `llama3` pulled (free LLM fallback)
+- [Ollama](https://ollama.ai) running locally with `qwen2.5:7b` pulled (evaluation judge) and `llama3` pulled (free generation fallback)
+- _Optional_: OpenAI API key for GPT-4o-mini generation
 
 ### 1. Clone and configure
 
@@ -89,9 +89,9 @@ First run takes 10–20 minutes because:
 
 | Service | URL |
 |---------|-----|
-| Frontend (Search / Chat / Eval) | http://localhost:3000 |
-| Backend API docs | http://localhost:8000/docs |
-| MLflow tracking UI | http://localhost:5000 |
+| Frontend (Search / Chat / Eval) | http://arxiv.localhost |
+| Backend API docs | http://arxiv.localhost/api/docs |
+| MLflow tracking UI | http://localhost:5001 |
 | Qdrant dashboard | http://localhost:6333/dashboard |
 
 ---
@@ -100,30 +100,32 @@ First run takes 10–20 minutes because:
 
 ### Via the frontend
 
-Navigate to http://localhost:3000/eval, select a pipeline variant, optionally add notes, and click **Run Eval**. Results appear in the table after ~2 minutes.
+First pull the judge model: `ollama pull qwen2.5:7b`.
+
+Navigate to http://arxiv.localhost/eval, select a pipeline variant, optionally add notes, and click **Run Eval**. A run takes several minutes with a local judge.
 
 ### Via curl
 
 ```bash
 # Run naive (no reranker) evaluation
-curl -X POST http://localhost:8000/eval/run \
+curl -X POST http://arxiv.localhost/api/eval/run \
   -H "Content-Type: application/json" \
   -d '{"pipeline_variant": "naive", "notes": "baseline comparison"}'
 
 # Run full pipeline (with reranker)
-curl -X POST http://localhost:8000/eval/run \
+curl -X POST http://arxiv.localhost/api/eval/run \
   -H "Content-Type: application/json" \
   -d '{"pipeline_variant": "reranked", "notes": "full pipeline"}'
 
 # Fetch history
-curl http://localhost:8000/eval/history
+curl http://arxiv.localhost/api/eval/history
 ```
 
 ### What's being evaluated
 
-The test set (`services/evaluation/testset.json`) contains 25 question/answer pairs spanning transformers, alignment, inference optimization, RAG, and more. See [EVALUATION.md](EVALUATION.md) for full benchmark results and analysis.
+The test set (`services/evaluation/testset.json`) contains 25 question/answer pairs spanning transformers, alignment, inference optimization, RAG, and more. Each run writes a JSON result file to `evals/results/` with per-question scores, the judge and generator models, and any failures. See [EVALUATION.md](EVALUATION.md) for the metrics, the judge setup, and how to read the results.
 
-> RAGAS requires `OPENAI_API_KEY` to score faithfulness and answer relevancy (uses gpt-4o-mini as judge). ~$0.05 per full run of 25 questions. Without an API key, retrieval runs but LLM-based scores are skipped.
+> Scoring uses a local judge (`qwen2.5:7b` via Ollama by default), so it is free. Any OpenAI-compatible endpoint can be the judge instead; set `JUDGE_BASE_URL`, `JUDGE_MODEL`, and `JUDGE_API_KEY`.
 
 ---
 
@@ -139,7 +141,7 @@ PAPERS_PER_CATEGORY=70
 2. Trigger re-ingestion:
 
 ```bash
-curl -X POST http://localhost:8000/ingest
+curl -X POST http://arxiv.localhost/api/ingest
 ```
 
 Or restart the ingestion container:
@@ -166,7 +168,7 @@ The semantic search returns the top-10 most relevant paper chunks, deduplicated 
 
 > Question: *"How does LoRA reduce the cost of fine-tuning large language models?"*
 
-**Answer:**
+**Example answer** (illustrative, not a recorded output):
 > LoRA reduces fine-tuning cost by injecting trainable low-rank decomposition matrices (A and B where W = W₀ + BA) into the attention weight matrices, while keeping the original pretrained weights frozen. This reduces trainable parameters by 10,000× compared to full fine-tuning. [Source 1] shows LoRA achieves comparable performance to full fine-tuning on GPT-3 with only 0.01% of the parameters updated. [Source 2] demonstrates that rank r=8 is sufficient for most downstream tasks.
 
 **Sources** (collapsible):
@@ -206,9 +208,11 @@ arxiv-rag/
 │   │   ├── settings.py
 │   │   ├── requirements.txt
 │   │   └── Dockerfile
-│   └── evaluation/             # RAGAS runner
+│   └── evaluation/             # RAGAS runner (local judge)
 │       ├── main.py             # FastAPI app
-│       ├── evaluator.py        # RAGAS + MLflow
+│       ├── evaluator.py        # Run, score, record (JSON, MLflow, Postgres)
+│       ├── judge.py            # RAGAS metrics + judge endpoint config
+│       ├── tests/              # pytest suite
 │       ├── settings.py
 │       ├── testset.json        # 25 ground-truth Q&A pairs
 │       ├── requirements.txt
@@ -250,10 +254,10 @@ docker compose down
 docker compose down -v
 
 # Manual ingest trigger
-curl -X POST http://localhost:8000/ingest
+curl -X POST http://arxiv.localhost/api/ingest
 
 # Check how many papers are indexed
-curl http://localhost:8001/status
+docker compose exec ingestion curl -s localhost:8001/status
 ```
 
 ---
@@ -262,12 +266,16 @@ curl http://localhost:8001/status
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `OPENAI_API_KEY` | _(empty)_ | If set, uses GPT-4o-mini for chat + RAGAS scoring |
+| `OPENAI_API_KEY` | _(empty)_ | If set, uses GPT-4o-mini for chat generation |
 | `OLLAMA_URL` | `http://host.docker.internal:11434` | Ollama endpoint (used when no OpenAI key) |
 | `OLLAMA_MODEL` | `llama3` | Ollama model to use |
 | `ARXIV_CATEGORIES` | `cs.LG,cs.AI,cs.CL` | Comma-separated ArXiv category list |
 | `PAPERS_PER_CATEGORY` | `70` | Papers to fetch per category per run |
 | `RUN_EVAL_ON_STARTUP` | `false` | Auto-run evaluation suite on first start |
+| `JUDGE_MODEL` | `qwen2.5:7b` | Evaluation judge model |
+| `JUDGE_BASE_URL` | `{OLLAMA_URL}/v1` | OpenAI-compatible judge endpoint |
+| `JUDGE_API_KEY` | _(empty)_ | Only for hosted judge endpoints |
+| `JUDGE_CONCURRENCY` | `2` | Questions scored in parallel |
 
 ---
 
@@ -277,7 +285,7 @@ curl http://localhost:8001/status
 |---------|:---:|:---:|
 | Semantic search | ✓ | ✓ |
 | Chat with papers | ✓* | ✓ |
-| RAGAS evaluation | ✗ | ✓ |
+| RAGAS evaluation | ✓ (local judge) | ✓ (local judge) |
 | Embeddings | ✓ local | ✓ local |
 | Reranking | ✓ local | ✓ local |
 

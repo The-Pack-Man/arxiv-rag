@@ -1,22 +1,37 @@
 """
 RAGAS evaluation runner.
-Compares naive RAG (no reranker) vs full pipeline (with reranker).
-Logs results to MLflow and Postgres.
+
+Runs the ground-truth test set through the backend for one pipeline variant
+(naive or reranked), scores every answer with four RAGAS metrics, and records
+the results in three places:
+
+- a JSON artifact in /app/results (mounted to evals/results/ in the repo),
+- MLflow (params, aggregate metrics, and the JSON as an artifact),
+- Postgres eval_results (for the frontend dashboard).
+
+A metric that fails for a question is recorded as null and counted. It is
+never replaced with a default score, so judge failures stay visible.
 """
+from __future__ import annotations
+
+import asyncio
 import json
+import math
 import time
-import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import httpx
 import mlflow
-import pandas as pd
 from loguru import logger
 from sqlalchemy import create_engine, text
 from sqlalchemy.pool import NullPool
 
+from judge import METRIC_INPUTS, MetricsBuilder, build_metrics, judge_config
 from settings import Settings
+
+METRIC_NAMES = list(METRIC_INPUTS)
 
 
 def load_testset(path: str) -> list[dict]:
@@ -28,9 +43,9 @@ async def query_backend(
     backend_url: str,
     question: str,
     use_reranker: bool,
-    timeout: int = 120,
+    timeout: int = 180,
 ) -> dict[str, Any]:
-    """Call backend /chat endpoint."""
+    """Call the backend /chat endpoint."""
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(
             f"{backend_url}/chat",
@@ -40,122 +55,55 @@ async def query_backend(
         return resp.json()
 
 
-def _ask_ollama(prompt: str, ollama_url: str, model: str) -> str:
-    """Send a single prompt to Ollama and return the response text."""
-    import httpx
-    try:
-        resp = httpx.post(
-            f"{ollama_url}/api/generate",
-            json={"model": model, "prompt": prompt, "stream": False},
-            timeout=120,
-        )
-        resp.raise_for_status()
-        return resp.json().get("response", "").strip()
-    except Exception as e:
-        logger.warning(f"Ollama request failed: {e}")
-        return ""
+async def score_sample(metrics: dict[str, Any], sample: dict[str, Any]) -> dict[str, Any]:
+    """Score one sample with every metric. Failures become None plus an error message."""
+    scores: dict[str, float | None] = {}
+    errors: dict[str, str] = {}
+    for name, metric in metrics.items():
+        kwargs = {field: sample[field] for field in METRIC_INPUTS[name]}
+        try:
+            result = await metric.ascore(**kwargs)
+            value = float(getattr(result, "value", result))
+            if math.isnan(value):
+                raise ValueError("judge returned NaN")
+            scores[name] = value
+        except Exception as e:  # judge errors must not be hidden
+            scores[name] = None
+            errors[name] = f"{type(e).__name__}: {e}"[:300]
+    return {"scores": scores, "errors": errors}
 
 
-def _score_faithfulness(answer: str, contexts: list[str], ollama_url: str, model: str) -> float:
-    """Ask Ollama: is this answer supported by the context? Returns 0.0–1.0."""
-    context_text = "\n\n".join(contexts[:3])  # top 3 chunks
-    prompt = (
-        f"You are an evaluator. Given the context below, rate how faithful the answer is "
-        f"to the context on a scale from 0.0 to 1.0, where 1.0 means every claim in the "
-        f"answer is directly supported by the context and 0.0 means none are.\n\n"
-        f"Context:\n{context_text}\n\n"
-        f"Answer:\n{answer}\n\n"
-        f"Respond with ONLY a single decimal number between 0.0 and 1.0."
-    )
-    raw = _ask_ollama(prompt, ollama_url, model)
-    try:
-        score = float(raw.split()[0])
-        return max(0.0, min(1.0, score))
-    except Exception:
-        return 0.5
+def aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Mean of each metric over questions where it succeeded, plus failure counts."""
+    out: dict[str, Any] = {}
+    for name in METRIC_NAMES:
+        values = [r["scores"][name] for r in rows if r["scores"].get(name) is not None]
+        out[name] = round(sum(values) / len(values), 4) if values else None
+        out[f"{name}_n"] = len(values)
+        out[f"{name}_failed"] = len(rows) - len(values)
+    return out
 
 
-def _score_answer_relevancy(question: str, answer: str, ollama_url: str, model: str) -> float:
-    """Ask Ollama: does this answer address the question? Returns 0.0–1.0."""
-    prompt = (
-        f"You are an evaluator. Rate how well the answer addresses the question on a "
-        f"scale from 0.0 to 1.0, where 1.0 means the answer directly and completely "
-        f"answers the question and 0.0 means it is completely irrelevant.\n\n"
-        f"Question:\n{question}\n\n"
-        f"Answer:\n{answer}\n\n"
-        f"Respond with ONLY a single decimal number between 0.0 and 1.0."
-    )
-    raw = _ask_ollama(prompt, ollama_url, model)
-    try:
-        score = float(raw.split()[0])
-        return max(0.0, min(1.0, score))
-    except Exception:
-        return 0.5
+async def score_all(
+    metrics: dict[str, Any], samples: list[dict[str, Any]], concurrency: int
+) -> list[dict[str, Any]]:
+    sem = asyncio.Semaphore(max(1, concurrency))
+
+    async def one(i: int, s: dict[str, Any]) -> dict[str, Any]:
+        async with sem:
+            logger.info(f"  scoring [{i + 1}/{len(samples)}] {s['user_input'][:60]}")
+            return {**s, **await score_sample(metrics, s)}
+
+    return await asyncio.gather(*(one(i, s) for i, s in enumerate(samples)))
 
 
-def _score_context_recall(ground_truth: str, contexts: list[str]) -> float:
-    """Heuristic: what fraction of ground truth keywords appear in the retrieved context."""
-    if not ground_truth:
-        return 0.0
-    import re
-    # Extract meaningful words (4+ chars) from ground truth
-    keywords = set(re.findall(r'\b\w{4,}\b', ground_truth.lower()))
-    if not keywords:
-        return 0.0
-    context_text = " ".join(contexts).lower()
-    found = sum(1 for kw in keywords if kw in context_text)
-    return found / len(keywords)
-
-
-def _score_context_precision(answer: str, contexts: list[str]) -> float:
-    """Heuristic: what fraction of retrieved chunks contain words from the answer."""
-    if not contexts or not answer:
-        return 0.0
-    import re
-    answer_words = set(re.findall(r'\b\w{4,}\b', answer.lower()))
-    if not answer_words:
-        return 0.0
-    relevant = sum(
-        1 for ctx in contexts
-        if any(w in ctx.lower() for w in answer_words)
-    )
-    return relevant / len(contexts)
-
-
-def compute_ragas_metrics(
-    questions: list[str],
-    answers: list[str],
-    contexts: list[list[str]],
-    ground_truths: list[str],
-    ollama_url: str,
-    ollama_model: str,
-) -> dict[str, float]:
-    """Compute RAG quality metrics using Ollama (no OpenAI needed)."""
-    logger.info(f"Computing metrics via Ollama ({ollama_model}) for {len(questions)} questions …")
-
-    faithfulness_scores = []
-    relevancy_scores = []
-    precision_scores = []
-    recall_scores = []
-
-    for i, (q, a, ctx, gt) in enumerate(zip(questions, answers, contexts, ground_truths)):
-        logger.info(f"  Scoring [{i+1}/{len(questions)}] …")
-        faithfulness_scores.append(_score_faithfulness(a, ctx, ollama_url, ollama_model))
-        relevancy_scores.append(_score_answer_relevancy(q, a, ollama_url, ollama_model))
-        precision_scores.append(_score_context_precision(a, ctx))
-        recall_scores.append(_score_context_recall(gt, ctx))
-
-    def mean(lst):
-        return sum(lst) / len(lst) if lst else 0.0
-
-    metrics = {
-        "faithfulness":       round(mean(faithfulness_scores), 4),
-        "answer_relevancy":   round(mean(relevancy_scores), 4),
-        "context_precision":  round(mean(precision_scores), 4),
-        "context_recall":     round(mean(recall_scores), 4),
-    }
-    logger.info(f"Metrics: {metrics}")
-    return metrics
+def write_artifact(results_dir: str, payload: dict[str, Any]) -> Path:
+    path = Path(results_dir)
+    path.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    out = path / f"{stamp}_{payload['pipeline_variant']}.json"
+    out.write_text(json.dumps(payload, indent=2))
+    return out
 
 
 def save_to_postgres(
@@ -166,7 +114,7 @@ def save_to_postgres(
     num_questions: int,
     params: dict,
     notes: str,
-):
+) -> None:
     try:
         engine = create_engine(postgres_url, poolclass=NullPool)
         with engine.connect() as conn:
@@ -200,13 +148,13 @@ async def run_evaluation(
     pipeline_variant: str,
     settings: Settings,
     notes: str = "",
+    metrics_builder: MetricsBuilder = build_metrics,
 ) -> dict[str, Any]:
-    """
-    Run a full RAGAS evaluation for one pipeline variant.
-    Returns dict with metrics + MLflow run_id.
-    """
+    """Run the full evaluation for one pipeline variant."""
     testset = load_testset(testset_path)
     use_reranker = pipeline_variant == "reranked"
+    judge = judge_config(settings)
+    metrics = metrics_builder(settings)
 
     mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
     mlflow.set_experiment("arxiv-rag-eval")
@@ -215,60 +163,75 @@ async def run_evaluation(
         "pipeline_variant": pipeline_variant,
         "use_reranker": use_reranker,
         "num_questions": len(testset),
+        "metrics": ",".join(METRIC_NAMES),
+        **judge.as_params(),
     }
 
     with mlflow.start_run(run_name=f"eval-{pipeline_variant}-{int(time.time())}") as run:
         mlflow.log_params(params)
         run_id = run.info.run_id
-        logger.info(f"MLflow run {run_id} — evaluating '{pipeline_variant}' on {len(testset)} questions")
+        logger.info(f"MLflow run {run_id}: '{pipeline_variant}' on {len(testset)} questions, judge {judge.model}")
 
-        questions, answers, contexts, ground_truths = [], [], [], []
-        errors = 0
-
+        samples: list[dict[str, Any]] = []
+        query_failures: list[dict[str, str]] = []
+        generator_model = None
         for i, item in enumerate(testset):
             q = item["question"]
-            gt = item.get("ground_truth", "")
-            logger.info(f"  [{i+1}/{len(testset)}] {q[:60]}")
+            logger.info(f"  querying [{i + 1}/{len(testset)}] {q[:60]}")
             try:
                 result = await query_backend(settings.backend_url, q, use_reranker)
-                answers.append(result.get("answer", ""))
-                ctx = [s.get("excerpt", "") for s in result.get("sources", [])]
-                contexts.append(ctx if ctx else [""])
-                questions.append(q)
-                ground_truths.append(gt)
             except Exception as e:
-                logger.warning(f"  Query failed: {e}")
-                errors += 1
-
-        mlflow.log_metric("queries_succeeded", len(questions))
-        mlflow.log_metric("queries_failed", errors)
-
-        metrics = {}
-        if questions:
-            metrics = compute_ragas_metrics(
-                questions, answers, contexts, ground_truths,
-                settings.ollama_url, settings.ollama_model,
+                logger.warning(f"  query failed: {e}")
+                query_failures.append({"id": item.get("id"), "error": str(e)[:300]})
+                continue
+            generator_model = result.get("model", generator_model)
+            samples.append(
+                {
+                    "id": item.get("id"),
+                    "category": item.get("category"),
+                    "user_input": q,
+                    "reference": item.get("ground_truth", ""),
+                    "response": result.get("answer", ""),
+                    "retrieved_contexts": result.get("contexts") or [""],
+                }
             )
-            for k, v in metrics.items():
+
+        rows = await score_all(metrics, samples, settings.judge_concurrency) if samples else []
+        summary = aggregate(rows) if rows else {}
+
+        mlflow.log_param("generator_model", generator_model or "unknown")
+        mlflow.log_metric("queries_succeeded", len(samples))
+        mlflow.log_metric("queries_failed", len(query_failures))
+        for k, v in summary.items():
+            if v is not None:
                 mlflow.log_metric(k, v)
-        else:
-            logger.info("No successful queries — skipping metrics")
+
+        payload = {
+            "run_id": run_id,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "pipeline_variant": pipeline_variant,
+            "generator_model": generator_model,
+            "params": params,
+            "summary": summary,
+            "query_failures": query_failures,
+            "rows": rows,
+            "notes": notes,
+        }
+        artifact = write_artifact(settings.results_dir, payload)
+        mlflow.log_artifact(str(artifact))
+        logger.info(f"Summary: {summary}")
+        logger.info(f"Wrote {artifact}")
 
         save_to_postgres(
-            settings.postgres_url,
-            run_id,
-            pipeline_variant,
-            metrics,
-            len(questions),
-            params,
-            notes,
+            settings.postgres_url, run_id, pipeline_variant, summary, len(samples), params, notes
         )
 
     return {
         "run_id": run_id,
         "pipeline_variant": pipeline_variant,
-        "metrics": metrics,
-        "num_questions": len(questions),
-        "errors": errors,
+        "metrics": summary,
+        "num_questions": len(samples),
+        "errors": len(query_failures),
+        "artifact": str(artifact),
         "params": params,
     }

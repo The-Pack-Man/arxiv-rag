@@ -125,6 +125,8 @@ services:
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3}
       TOP_K_RETRIEVE: 20
       TOP_K_RERANK: 5
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8000/health || exit 1"]
       interval: 10s
@@ -147,11 +149,16 @@ services:
       MLFLOW_TRACKING_URI: http://mlflow:5000
       POSTGRES_URL: postgresql://arxiv:arxiv@postgres:5432/arxiv
       OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3}
+      JUDGE_BASE_URL: ${JUDGE_BASE_URL:-}
+      JUDGE_MODEL: ${JUDGE_MODEL:-qwen2.5:7b}
+      JUDGE_API_KEY: ${JUDGE_API_KEY:-}
+      JUDGE_CONCURRENCY: ${JUDGE_CONCURRENCY:-2}
       RUN_ON_STARTUP: ${RUN_EVAL_ON_STARTUP:-false}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./services/evaluation/testset.json:/app/testset.json:ro
-      - eval_results:/app/results
+      - ./evals/results:/app/results
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8002/health || exit 1"]
       interval: 10s
@@ -178,7 +185,6 @@ volumes:
   qdrant_data:
   mlflow_artifacts:
   ingestion_cache:
-  eval_results:
 
 networks:
   default:

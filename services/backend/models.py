@@ -46,6 +46,7 @@ class ChatResponse(BaseModel):
     model: str
     latency_ms: int
     reranked: bool
+    contexts: list[str] = []  # full chunk texts given to the LLM (used by evaluation)
 
 
 class EvalRunRequest(BaseModel):
